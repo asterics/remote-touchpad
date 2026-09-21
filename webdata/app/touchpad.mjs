@@ -23,6 +23,8 @@ import {POINTER_BUTTON_LEFT, POINTER_BUTTON_MIDDLE, POINTER_BUTTON_RIGHT} from "
 const TOUCH_MOVE_THRESHOLD = [10, 15, 15];
 // Max time between consecutive touches for clicking or dragging (as milliseconds)
 const TOUCH_TIMEOUT = 250;
+// Interval for resending the joystick offset while a finger is held still (as milliseconds)
+const JOYSTICK_UPDATE_INTERVAL = 50;
 // [[pixel/second, multiplicator], ...]
 const POINTER_ACCELERATION = [
     [0, 0],
@@ -63,6 +65,9 @@ const calculateAccelerationMult = (speed) => {
 export default class Touchpad {
     #moveSpeed = 1;
     #scrollSpeed = 1;
+    #mouseMode = "trackpad";
+    #joystickDeadzone = 4;
+    #joystickAcceleration = 1;
 
     #moved = false;
     #startTimeStamp = 0;
@@ -71,6 +76,9 @@ export default class Touchpad {
     #ongoingTouches = [];
     #dragging = false;
     #draggingTimeout = null;
+    #joystickTimer = null;
+    #joystickOffsetX = 0;
+    #joystickOffsetY = 0;
     #inputController;
     #checkAllowedCallback;
 
@@ -86,6 +94,11 @@ export default class Touchpad {
     configure(config) {
         this.#moveSpeed = config.moveSpeed;
         this.#scrollSpeed = config.scrollSpeed;
+        this.#mouseMode = config.mouseMode || "trackpad";
+        this.#joystickDeadzone = config.joystickDeadzone ?? this.#joystickDeadzone;
+        this.#joystickAcceleration = config.joystickAcceleration ?? this.#joystickAcceleration;
+        this.#inputController.joystickConfigure(
+            this.#moveSpeed, this.#joystickDeadzone, this.#joystickAcceleration);
     }
 
     #ongoingTouchIndexById(idToFind) {
@@ -100,6 +113,24 @@ export default class Touchpad {
     #handleDraggingTimeout() {
         this.#draggingTimeout = null;
         this.#inputController.pointerButton(POINTER_BUTTON_LEFT, false);
+    }
+
+    #startJoystickTimer() {
+        if (this.#joystickTimer != null) {
+            return;
+        }
+        this.#joystickTimer = setInterval(() => {
+            this.#inputController.pointerJoystickMove(this.#joystickOffsetX, this.#joystickOffsetY);
+        }, JOYSTICK_UPDATE_INTERVAL);
+    }
+
+    #stopJoystickTimer() {
+        if (this.#joystickTimer != null) {
+            clearInterval(this.#joystickTimer);
+            this.#joystickTimer = null;
+        }
+        this.#joystickOffsetX = 0;
+        this.#joystickOffsetY = 0;
     }
 
     #handleTouchstart(event) {
@@ -159,6 +190,10 @@ export default class Touchpad {
             this.#moved = true;
         }
         if (this.#ongoingTouches.length == 0 && this.#releasedCount >= 1) {
+            if (this.#joystickTimer != null) {
+                this.#stopJoystickTimer();
+                this.#inputController.pointerJoystickMove(0, 0);
+            }
             if (this.#dragging) {
                 this.#dragging = false;
                 this.#inputController.pointerButton(POINTER_BUTTON_LEFT, false);
@@ -187,6 +222,8 @@ export default class Touchpad {
     #handleTouchmove(event) {
         let sumX = 0;
         let sumY = 0;
+        let offsetX = 0;
+        let offsetY = 0;
         const touches = event.changedTouches;
         let foundTouch = false;
         for (let i = 0; i < touches.length; i += 1) {
@@ -211,6 +248,8 @@ export default class Touchpad {
             const timeDelta = event.timeStamp - this.#ongoingTouches[idx].timeStamp;
             sumX += dx * calculateAccelerationMult(Math.abs(dx) / timeDelta * 1000);
             sumY += dy * calculateAccelerationMult(Math.abs(dy) / timeDelta * 1000);
+            offsetX = touches[i].pageX - this.#ongoingTouches[idx].pageXStart;
+            offsetY = touches[i].pageY - this.#ongoingTouches[idx].pageYStart;
             this.#ongoingTouches[idx].pageX = touches[i].pageX;
             this.#ongoingTouches[idx].pageY = touches[i].pageY;
             this.#ongoingTouches[idx].timeStamp = event.timeStamp;
@@ -221,8 +260,15 @@ export default class Touchpad {
         event.preventDefault();
         if (this.#moved && event.timeStamp - this.#lastEndTimeStamp >= TOUCH_TIMEOUT) {
             if (this.#ongoingTouches.length == 1 || this.#dragging) {
-                this.#inputController.pointerMove(
-                    sumX * this.#moveSpeed, sumY * this.#moveSpeed);
+                if (this.#mouseMode == "joystick") {
+                    this.#joystickOffsetX = offsetX;
+                    this.#joystickOffsetY = offsetY;
+                    this.#startJoystickTimer();
+                    this.#inputController.pointerJoystickMove(offsetX, offsetY);
+                } else {
+                    this.#inputController.pointerMove(
+                        sumX * this.#moveSpeed, sumY * this.#moveSpeed);
+                }
             } else if (this.#ongoingTouches.length == 2) {
                 this.#inputController.pointerScroll(
                     -sumX * this.#scrollSpeed, -sumY * this.#scrollSpeed, false);

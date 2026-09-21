@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+* Add settings panel to the web GUI
+* Add joystick mouse control mode (proportional movement from a touch zero point) with adjustable speed, deadzone and hold acceleration
+
 ## 1.5.5 (2026-09-12)
 
 * Add macOS support

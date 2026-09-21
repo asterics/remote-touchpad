@@ -6,6 +6,20 @@ To take control open the displayed URL or scan the QR code.
 
 Supports Flatpak's RemoteDesktop portal (for Wayland), X11, macOS and Windows.
 
+## About this fork
+
+This fork adds a settings panel to the web GUI with:
+
+* A mouse control mode switch between the original **trackpad** behavior
+  (relative dragging) and a new **joystick** mode: touching the screen sets a
+  zero point, and moving the finger away from it drives a proportional,
+  joystick-like cursor movement (computed server-side) until the finger is
+  lifted. Clicking and dragging behave exactly as before.
+* An adjustable **mouse speed** (gain, 10%-1000%, via slider).
+* An adjustable **deadzone** (0-20 pixels) around the joystick zero point.
+* An adjustable **acceleration factor**, so the cursor moves faster the
+  longer the finger is held away from the zero point.
+
 ## Installation
 
 * [Flatpak](https://flathub.org/apps/details/com.github.unrud.RemoteTouchpad)

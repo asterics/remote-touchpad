@@ -28,6 +28,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	mathrand "math/rand"
 	"net"
 	"net/http"
@@ -50,14 +51,73 @@ const (
 	defaultBind             string        = ":0"
 	version                 string        = "1.5.5"
 	prettyAppName           string        = "Remote Touchpad"
+	// pixels/second of cursor movement per pixel of joystick deflection (at gain 1)
+	joystickBaseGain float64 = 0.4
+	// clamp elapsed time between joystick updates to avoid jumps after pauses (seconds)
+	joystickMaxDT float64 = 0.25
+	// upper bound for the hold-duration acceleration multiplier
+	joystickMaxAccelMult float64 = 8
 )
 
 type config struct {
-	UpdateRate       uint    `json:"updateRate"`
-	ScrollSpeed      float64 `json:"scrollSpeed"`
-	MoveSpeed        float64 `json:"moveSpeed"`
-	MouseScrollSpeed float64 `json:"mouseScrollSpeed"`
-	MouseMoveSpeed   float64 `json:"mouseMoveSpeed"`
+	UpdateRate           uint    `json:"updateRate"`
+	ScrollSpeed          float64 `json:"scrollSpeed"`
+	MoveSpeed            float64 `json:"moveSpeed"`
+	MouseScrollSpeed     float64 `json:"mouseScrollSpeed"`
+	MouseMoveSpeed       float64 `json:"mouseMoveSpeed"`
+	MouseMode            string  `json:"mouseMode"`
+	JoystickDeadzone     float64 `json:"joystickDeadzone"`
+	JoystickAcceleration float64 `json:"joystickAcceleration"`
+}
+
+// per-connection state for joystick mode, only accessed by a single connection's goroutine
+type joystickState struct {
+	gain         float64
+	deadzone     float64
+	acceleration float64
+	holding      bool
+	holdStart    time.Time
+	lastUpdate   time.Time
+	remainderX   float64
+	remainderY   float64
+}
+
+// applyJoystickMove converts the current finger offset from the zero point into
+// proportional cursor movement, applying deadzone, gain and hold-duration acceleration.
+func applyJoystickMove(controller inputcontrol.Controller, js *joystickState, offsetX, offsetY float64) error {
+	now := time.Now()
+	mag := math.Hypot(offsetX, offsetY)
+	if mag <= js.deadzone {
+		js.holding = false
+		js.remainderX, js.remainderY = 0, 0
+		js.lastUpdate = now
+		return nil
+	}
+	if !js.holding {
+		js.holding = true
+		js.holdStart = now
+		js.lastUpdate = now
+	}
+	dt := now.Sub(js.lastUpdate).Seconds()
+	if dt > joystickMaxDT {
+		dt = joystickMaxDT
+	}
+	js.lastUpdate = now
+	accelMult := 1 + js.acceleration*now.Sub(js.holdStart).Seconds()
+	if accelMult > joystickMaxAccelMult {
+		accelMult = joystickMaxAccelMult
+	}
+	effMag := mag - js.deadzone
+	speed := effMag * joystickBaseGain * js.gain * accelMult
+	moveX := offsetX/mag*speed*dt + js.remainderX
+	moveY := offsetY/mag*speed*dt + js.remainderY
+	intX, intY := int(moveX), int(moveY)
+	js.remainderX = moveX - float64(intX)
+	js.remainderY = moveY - float64(intY)
+	if intX == 0 && intY == 0 {
+		return nil
+	}
+	return controller.PointerMove(intX, intY)
 }
 
 const (
@@ -67,9 +127,11 @@ const (
 	commandPointerScrollFinished   byte = 'S'
 	commandPointerMove             byte = 'm'
 	commandPointerButton           byte = 'b'
+	commandPointerJoystickMove     byte = 'j'
+	commandJoystickConfig          byte = 'g'
 )
 
-func processCommand(controller inputcontrol.Controller, commandWithArg string) error {
+func processCommand(controller inputcontrol.Controller, js *joystickState, commandWithArg string) error {
 	if len(commandWithArg) == 0 {
 		return errors.New("empty command")
 	}
@@ -83,6 +145,19 @@ func processCommand(controller inputcontrol.Controller, commandWithArg string) e
 		for i, part := range parts {
 			var err error
 			if *targets[i], err = strconv.Atoi(part); err != nil {
+				return fmt.Errorf("argument %d: %w", i, err)
+			}
+		}
+		return nil
+	}
+	parseFloats := func(s string, targets ...*float64) error {
+		parts := strings.Split(s, ";")
+		if len(parts) != len(targets) {
+			return errors.New("wrong number of arguments")
+		}
+		for i, part := range parts {
+			var err error
+			if *targets[i], err = strconv.ParseFloat(part, 64); err != nil {
 				return fmt.Errorf("argument %d: %w", i, err)
 			}
 		}
@@ -130,6 +205,24 @@ func processCommand(controller inputcontrol.Controller, commandWithArg string) e
 			return errors.New("unsupported pointer button")
 		}
 		return controller.PointerButton(button, pressed != 0)
+	case commandPointerJoystickMove:
+		var x, y int
+		if len(arg) != 0 {
+			if err := parseInts(arg, &x, &y); err != nil {
+				return err
+			}
+		}
+		return applyJoystickMove(controller, js, float64(x), float64(y))
+	case commandJoystickConfig:
+		var gain, deadzone, acceleration float64
+		if err := parseFloats(arg, &gain, &deadzone, &acceleration); err != nil {
+			return err
+		}
+		if gain <= 0 || deadzone < 0 || acceleration < 0 {
+			return errors.New("invalid joystick configuration")
+		}
+		js.gain, js.deadzone, js.acceleration = gain, deadzone, acceleration
+		return nil
 	default:
 		return errors.New("unsupported command")
 	}
@@ -185,10 +278,16 @@ func main() {
 	flag.Float64Var(&config.ScrollSpeed, "scroll-speed", 1, "scroll speed multiplier")
 	flag.Float64Var(&config.MouseMoveSpeed, "mouse-move-speed", 1, "mouse move speed multiplier")
 	flag.Float64Var(&config.MouseScrollSpeed, "mouse-scroll-speed", 1, "mouse scroll speed multiplier")
+	flag.StringVar(&config.MouseMode, "mouse-mode", "trackpad", "touch mouse control mode: \"trackpad\" or \"joystick\"")
+	flag.Float64Var(&config.JoystickDeadzone, "joystick-deadzone", 4, "joystick mode: deadzone radius in pixels (0-20)")
+	flag.Float64Var(&config.JoystickAcceleration, "joystick-acceleration", 1, "joystick mode: acceleration factor while held (0 disables)")
 	flag.Parse()
 	if showVersion {
 		fmt.Println(version)
 		return
+	}
+	if config.MouseMode != "trackpad" && config.MouseMode != "joystick" {
+		log.Fatal(`mouse mode must be "trackpad" or "joystick"`)
 	}
 	if certFile != "" && keyFile == "" {
 		log.Fatal("TLS private key file missing")
@@ -260,11 +359,17 @@ func main() {
 			return
 		}
 		websocket.JSON.Send(ws, config)
+		js := &joystickState{
+			gain:         config.MoveSpeed,
+			deadzone:     config.JoystickDeadzone,
+			acceleration: config.JoystickAcceleration,
+			lastUpdate:   time.Now(),
+		}
 		for {
 			if err := websocket.Message.Receive(ws, &message); err != nil {
 				return
 			}
-			if err := processCommand(controller, message); err != nil {
+			if err := processCommand(controller, js, message); err != nil {
 				log.Print(fmt.Errorf("%s controller: %w", controllerName, err))
 				return
 			}

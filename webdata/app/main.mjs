@@ -50,6 +50,7 @@ window.app = {
     text: inputController.keyboardText.bind(inputController),
     toggleFullscreen: ui.toggleFullscreen.bind(ui),
     showTextInput: ui.showTextInput.bind(ui),
+    showSettings: ui.showSettings.bind(ui),
     showKeys: ui.showKeys.bind(ui),
     setKeysPage: ui.setKeysPage.bind(ui),
 };

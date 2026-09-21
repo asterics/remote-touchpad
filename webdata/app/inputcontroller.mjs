@@ -46,6 +46,8 @@ const COMMAND_POINTER_SCROLL_IN_PROGRESS = "s";
 const COMMAND_POINTER_SCROLL_FINISHED = "S";
 const COMMAND_POINTER_MOVE = "m";
 const COMMAND_POINTER_BUTTON = "b";
+const COMMAND_POINTER_JOYSTICK_MOVE = "j";
+const COMMAND_JOYSTICK_CONFIG = "g";
 
 export default class InputController {
     #updateRate = 0;
@@ -120,6 +122,22 @@ export default class InputController {
 
     pointerButton(button, press) {
         this.#socket.send(`${COMMAND_POINTER_BUTTON}${button};${press ? 1 : 0}`);
+    }
+
+    // Sends the finger's current offset from the joystick zero point (not a delta);
+    // the server derives velocity from it (deadzone/gain/hold-acceleration applied server-side).
+    pointerJoystickMove(offsetX, offsetY) {
+        const x = Math.round(offsetX);
+        const y = Math.round(offsetY);
+        if (x != 0 || y != 0) {
+            this.#socket.send(`${COMMAND_POINTER_JOYSTICK_MOVE}${x};${y}`);
+        } else {
+            this.#socket.send(COMMAND_POINTER_JOYSTICK_MOVE);
+        }
+    }
+
+    joystickConfigure(gain, deadzone, acceleration) {
+        this.#socket.send(`${COMMAND_JOYSTICK_CONFIG}${gain};${deadzone};${acceleration}`);
     }
 
     keyboardKey(key) {

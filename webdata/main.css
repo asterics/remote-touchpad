@@ -226,3 +226,40 @@ textarea:focus {
         border-left: none;
     }
 } }
+
+.settings-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    width: 100%;
+    max-width: 24rem;
+    font-size: 1.2rem;
+}
+
+.settings-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.settings-form select {
+    font-size: 1.2rem;
+    font-family: sans-serif;
+    color: white;
+    background-color: transparent;
+    border: 1px solid black;
+    border-radius: 2px;
+    padding: 0.4rem;
+    touch-action: manipulation;
+}
+
+.settings-form select option {
+    color: black;
+}
+
+.settings-form input[type="range"] {
+    width: 100%;
+    accent-color: white;
+    touch-action: pan-x;
+}
+

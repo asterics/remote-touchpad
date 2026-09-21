@@ -19,6 +19,7 @@
 
 import Keyboard from "./keyboard.mjs";
 import Mouse from "./mouse.mjs";
+import Settings from "./settings.mjs";
 import Touchpad from "./touchpad.mjs";
 import * as compat from "./compat.mjs";
 
@@ -35,6 +36,7 @@ const keysPages = keysScene.querySelectorAll(":scope > .page");
 const textInputScene = document.getElementById("text-input");
 const textInput = textInputScene.querySelector("textarea");
 const mouseScene = document.getElementById("mouse");
+const settingsScene = document.getElementById("settings");
 const sendText = document.getElementById("send-text");
 
 export default class UI {
@@ -47,6 +49,8 @@ export default class UI {
     #mouse;
     #keyboard;
     #touchpad;
+    #settings;
+    #serverConfig = null;
 
     constructor(inputController) {
         this.#inputController = inputController;
@@ -55,6 +59,7 @@ export default class UI {
             () => this.#activeScene?.classList.contains("keyboard-input"));
         this.#touchpad = new Touchpad(inputController,
             (target) => target.classList.contains("touch-input"));
+        this.#settings = new Settings(this.#handleSettingsChange.bind(this));
         document.addEventListener("mousedown", this.#handleMousedown.bind(this));
         document.addEventListener("touchend", this.#handleTouchend.bind(this));
         textInput.addEventListener("input", () => { this.#updateTextInput(); });
@@ -70,13 +75,24 @@ export default class UI {
     }
 
    configure(config) {
-        this.#mouse.configure(config);
-        this.#keyboard.configure(config);
-        this.#touchpad.configure(config);
+        this.#serverConfig = config;
+        this.#settings.applyServerDefaults(config);
+        this.#applyEffectiveConfig();
         if (!this.#closed) {
             this.#ready = true;
         }
         this.#update();
+    }
+
+    #applyEffectiveConfig() {
+        const effectiveConfig = {...this.#serverConfig, ...this.#settings.values};
+        this.#mouse.configure(effectiveConfig);
+        this.#keyboard.configure(effectiveConfig);
+        this.#touchpad.configure(effectiveConfig);
+    }
+
+    #handleSettingsChange() {
+        this.#applyEffectiveConfig();
     }
 
     close() {
@@ -171,6 +187,13 @@ export default class UI {
         }
     }
 
+    showSettings() {
+        this.#showScene(settingsScene);
+        if (history.state != "settings") {
+            history.pushState("settings", "");
+        }
+    }
+
     toggleFullscreen() {
         if (compat.fullscreenElement()) {
             compat.exitFullscreen();
@@ -192,6 +215,8 @@ export default class UI {
             this.showKeys(history.state.substr("keys:".length));
         } else if (history.state == "text-input") {
             this.showTextInput();
+        } else if (history.state == "settings") {
+            this.showSettings();
         } else {
             this.#showScene(padScene);
         }
