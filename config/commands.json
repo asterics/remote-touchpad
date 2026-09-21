@@ -1,0 +1,21 @@
+[
+    {
+        "phrases": ["Hey Computer", "He Blechtrottel"],
+        "action": "print",
+        "text": "Yes that is me - I wnat to serve you!"
+    },
+    {
+        "phrases": ["turn on light", "lights on", "licht ein", "einschalten"],
+        "action": "uart",
+        "port": "COM7",
+        "baudRate": 115200,
+        "text": "AT IP licht-ein\n"
+    },
+    {
+        "phrases": ["turn off light", "lights off", "licht aus", "ausschalten"],
+        "action": "uart",
+        "port": "COM7",
+        "baudRate": 115200,
+        "text": "AT IP licht-aus\n"
+    }
+]

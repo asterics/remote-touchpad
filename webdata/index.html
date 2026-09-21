@@ -23,6 +23,8 @@
     <button class="top right" onclick="app.showSettings()">⚙</button>
     <button class="bottom left visible-if-fullscreen-enabled" onclick="app.toggleFullscreen()">⤢</button>
     <button class="bottom right" onclick="app.showTextInput()">⌨</button>
+    <button class="floating" id="speak-button" title="Push to talk">🎤</button>
+    <p id="voice-status" class="hidden"></p>
 </div>
 
 <div id="settings" class="scene">
@@ -46,6 +48,10 @@
         <label class="joystick-only">
             Acceleration <span id="settings-acceleration-value">1.0</span>
             <input type="range" id="settings-acceleration" min="0" max="10" step="0.5" value="1">
+        </label>
+        <label>
+            Push-to-talk key
+            <button type="button" class="key-picker" id="ptt-key-button">Not set</button>
         </label>
     </div>
     <button class="top left" onclick="history.back()">⯇</button>

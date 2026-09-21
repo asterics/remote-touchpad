@@ -73,6 +73,12 @@ type config struct {
 	JoystickAcceleration float64 `json:"joystickAcceleration"`
 }
 
+// feedbackMessage is sent to the client to report the outcome of a voice command,
+// distinguished from the one-time config message by its distinct JSON key.
+type feedbackMessage struct {
+	VoiceFeedback string `json:"voiceFeedback"`
+}
+
 // persistentSettings holds the user-adjustable settings that are saved to disk,
 // so the next server start resumes with the settings last used in the web GUI.
 type persistentSettings struct {
@@ -213,9 +219,11 @@ const (
 	commandPointerButton           byte = 'b'
 	commandPointerJoystickMove     byte = 'j'
 	commandJoystickConfig          byte = 'g'
+	commandVoiceCommand            byte = 'v'
 )
 
-func processCommand(controller inputcontrol.Controller, js *joystickState, store *settingsStore, commandWithArg string) error {
+func processCommand(controller inputcontrol.Controller, js *joystickState, store *settingsStore,
+	commands voiceCommands, sendFeedback func(string), commandWithArg string) error {
 	if len(commandWithArg) == 0 {
 		return errors.New("empty command")
 	}
@@ -317,6 +325,24 @@ func processCommand(controller inputcontrol.Controller, js *joystickState, store
 			JoystickAcceleration: acceleration,
 		})
 		return nil
+	case commandVoiceCommand:
+		if !utf8.ValidString(arg) {
+			return errors.New("invalid utf-8")
+		}
+		cmd, ok := commands.match(arg)
+		if !ok {
+			sendFeedback(fmt.Sprintf("Unrecognized command: %q", arg))
+			return nil
+		}
+		// A failing action (e.g. serial port unavailable) shouldn't drop the connection.
+		result, err := cmd.run(controller)
+		if err != nil {
+			log.Printf("voice command %q failed: %v", arg, err)
+			sendFeedback(fmt.Sprintf("Command failed: %v", err))
+			return nil
+		}
+		sendFeedback(result)
+		return nil
 	default:
 		return errors.New("unsupported command")
 	}
@@ -366,7 +392,8 @@ func main() {
 	} else if loaded, err := loadPersistentSettings(settingsPath); err == nil {
 		persisted = loaded
 	}
-	var bind, certFile, keyFile, secret string
+	defaultCommandsPath, _ := voiceCommandsFilePath()
+	var bind, certFile, keyFile, secret, commandsFile string
 	var showVersion, trustedMode bool
 	var config config
 	flag.BoolVar(&showVersion, "version", false, "show program's version number and exit")
@@ -375,6 +402,7 @@ func main() {
 	flag.BoolVar(&trustedMode, "trusted", false, "trusted mode: no secret required, for a fixed, bookmarkable URL (only use on trusted networks)")
 	flag.StringVar(&certFile, "cert", "", "file containing TLS certificate")
 	flag.StringVar(&keyFile, "key", "", "file containing TLS private key")
+	flag.StringVar(&commandsFile, "commands-file", defaultCommandsPath, "JSON file with voice commands for the push-to-talk button")
 	flag.UintVar(&config.UpdateRate, "update-rate", 30, "number of updates per second")
 	flag.Float64Var(&config.MoveSpeed, "move-speed", persisted.MoveSpeed, "move speed multiplier")
 	flag.Float64Var(&config.ScrollSpeed, "scroll-speed", 1, "scroll speed multiplier")
@@ -406,6 +434,14 @@ func main() {
 	}
 	if len(inputcontrol.Controllers) == 0 {
 		log.Fatal("compiled without controller")
+	}
+	var commands voiceCommands
+	if commandsFile != "" {
+		if loaded, err := loadVoiceCommands(commandsFile); err != nil {
+			log.Printf("voice commands disabled: %v", err)
+		} else {
+			commands = loaded
+		}
 	}
 	var controller inputcontrol.Controller
 	var controllerName string
@@ -482,11 +518,14 @@ func main() {
 			acceleration: settings.JoystickAcceleration,
 			lastUpdate:   time.Now(),
 		}
+		sendFeedback := func(text string) {
+			websocket.JSON.Send(ws, feedbackMessage{VoiceFeedback: text})
+		}
 		for {
 			if err := websocket.Message.Receive(ws, &message); err != nil {
 				return
 			}
-			if err := processCommand(controller, js, store, message); err != nil {
+			if err := processCommand(controller, js, store, commands, sendFeedback, message); err != nil {
 				log.Print(fmt.Errorf("%s controller: %w", controllerName, err))
 				return
 			}

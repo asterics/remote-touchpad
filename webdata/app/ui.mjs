@@ -20,6 +20,7 @@
 import Keyboard from "./keyboard.mjs";
 import Mouse from "./mouse.mjs";
 import Settings from "./settings.mjs";
+import Speech from "./speech.mjs";
 import Touchpad from "./touchpad.mjs";
 import * as compat from "./compat.mjs";
 
@@ -50,6 +51,7 @@ export default class UI {
     #keyboard;
     #touchpad;
     #settings;
+    #speech;
     #serverConfig = null;
 
     constructor(inputController) {
@@ -60,6 +62,7 @@ export default class UI {
         this.#touchpad = new Touchpad(inputController,
             (target) => target.classList.contains("touch-input"));
         this.#settings = new Settings(this.#handleSettingsChange.bind(this));
+        this.#speech = new Speech(inputController);
         document.addEventListener("mousedown", this.#handleMousedown.bind(this));
         document.addEventListener("touchend", this.#handleTouchend.bind(this));
         textInput.addEventListener("input", () => { this.#updateTextInput(); });
@@ -93,6 +96,10 @@ export default class UI {
 
     #handleSettingsChange() {
         this.#applyEffectiveConfig();
+    }
+
+    showVoiceFeedback(text) {
+        this.#speech.showFeedback(text);
     }
 
     close() {

@@ -127,6 +127,30 @@ button.right {
     border-right: none;
 }
 
+button.floating {
+    position: absolute;
+    bottom: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+button.floating.listening {
+    box-shadow: 0 0 1rem red inset;
+}
+
+#voice-status {
+    position: absolute;
+    bottom: 4.5rem;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 80%;
+    padding: 0.3rem 0.8rem;
+    font-size: 1rem;
+    background-color: rgba(0, 0, 0, 0.6);
+    border-radius: 4px;
+    pointer-events: none;
+}
+
 .buttons {
     display: flex;
     flex-direction: row;
@@ -261,5 +285,17 @@ textarea:focus {
     width: 100%;
     accent-color: white;
     touch-action: pan-x;
+}
+
+.settings-form button.key-picker {
+    width: auto;
+    height: auto;
+    min-width: 0;
+    min-height: 0;
+    align-self: flex-start;
+    padding: 0.4rem 0.8rem;
+    font-size: 1.2rem;
+    font-family: sans-serif;
+    touch-action: manipulation;
 }
 

@@ -46,14 +46,18 @@ export default class Socket extends EventTarget {
             this.#authenticated = true;
             return;
         }
-        let config;
+        let message;
         try {
-            config = JSON.parse(event.data);
+            message = JSON.parse(event.data);
         } catch (e) {
             this.#ws.close();
             throw (e);
         }
-        this.dispatchEvent(new CustomEvent("config", {detail: config}));
+        if (message && typeof message == "object" && "voiceFeedback" in message) {
+            this.dispatchEvent(new CustomEvent("voice-feedback", {detail: message.voiceFeedback}));
+            return;
+        }
+        this.dispatchEvent(new CustomEvent("config", {detail: message}));
     }
 
     #handle_ws_close() {

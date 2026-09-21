@@ -48,6 +48,7 @@ const COMMAND_POINTER_MOVE = "m";
 const COMMAND_POINTER_BUTTON = "b";
 const COMMAND_POINTER_JOYSTICK_MOVE = "j";
 const COMMAND_JOYSTICK_CONFIG = "g";
+const COMMAND_VOICE_COMMAND = "v";
 
 export default class InputController {
     #updateRate = 0;
@@ -148,5 +149,11 @@ export default class InputController {
 
     keyboardText(text) {
         this.#socket.send(`${COMMAND_KEYBOARD_TEXT}${text}`);
+    }
+
+    // Sends the recognized speech text; the server matches it against the
+    // configured voice commands and replies with a "voiceFeedback" message.
+    voiceCommand(text) {
+        this.#socket.send(`${COMMAND_VOICE_COMMAND}${text}`);
     }
 }

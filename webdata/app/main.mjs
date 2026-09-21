@@ -35,6 +35,10 @@ socket.addEventListener("config", (event) => {
     ui.configure(config);
 });
 
+socket.addEventListener("voice-feedback", (event) => {
+    ui.showVoiceFeedback(event.detail);
+});
+
 socket.addEventListener("close", () => {
     ui.close();
 });
