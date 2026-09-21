@@ -20,6 +20,14 @@ This fork adds a settings panel to the web GUI with:
 * An adjustable **acceleration factor**, so the cursor moves faster the
   longer the finger is held away from the zero point.
 
+Settings changed in the web GUI are saved on the server and are still in
+effect after restarting it.
+
+A new **trusted mode** (`-trusted` flag) disables the per-run secret, so the
+server can be reached under a fixed, bookmarkable URL (combine with a fixed
+port, e.g. `-bind :8080`). Only use this on networks you trust, since anyone
+who can reach the address gets full control without authentication.
+
 ## Installation
 
 * [Flatpak](https://flathub.org/apps/details/com.github.unrud.RemoteTouchpad)

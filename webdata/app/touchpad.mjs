@@ -98,7 +98,7 @@ export default class Touchpad {
         this.#joystickDeadzone = config.joystickDeadzone ?? this.#joystickDeadzone;
         this.#joystickAcceleration = config.joystickAcceleration ?? this.#joystickAcceleration;
         this.#inputController.joystickConfigure(
-            this.#moveSpeed, this.#joystickDeadzone, this.#joystickAcceleration);
+            this.#mouseMode, this.#moveSpeed, this.#joystickDeadzone, this.#joystickAcceleration);
     }
 
     #ongoingTouchIndexById(idToFind) {

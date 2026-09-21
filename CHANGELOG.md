@@ -4,6 +4,8 @@
 
 * Add settings panel to the web GUI
 * Add joystick mouse control mode (proportional movement from a touch zero point) with adjustable speed, deadzone and hold acceleration
+* Persist settings on the server across restarts
+* Add trusted mode (`-trusted`) for a fixed, secret-less URL
 
 ## 1.5.5 (2026-09-12)
 

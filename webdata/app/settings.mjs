@@ -17,8 +17,6 @@
  *    along with Remote-Touchpad.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-const STORAGE_KEY = "settings";
-
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
 const modeSelect = document.getElementById("settings-mouse-mode");
@@ -30,20 +28,19 @@ const accelerationRange = document.getElementById("settings-acceleration");
 const accelerationValue = document.getElementById("settings-acceleration-value");
 const joystickOnlyElements = document.querySelectorAll(".joystick-only");
 
+// The server persists settings across restarts, so it's the single source of truth;
+// this class only mirrors the current values into the form and reports user edits.
 export default class Settings {
-    // Overrides persisted by the user, layered on top of the server-provided defaults
     #values = {
         mouseMode: "trackpad",
         moveSpeed: 1,
         joystickDeadzone: 4,
         joystickAcceleration: 1,
     };
-    #defaultsApplied = false;
     #onChange;
 
     constructor(onChange) {
         this.#onChange = onChange;
-        this.#loadFromStorage();
         modeSelect.addEventListener("change", this.#handleChange.bind(this));
         speedRange.addEventListener("input", this.#handleChange.bind(this));
         deadzoneRange.addEventListener("input", this.#handleChange.bind(this));
@@ -56,40 +53,13 @@ export default class Settings {
         return this.#values;
     }
 
-    // Seeds sliders from the server-provided config on first connection only,
-    // so a returning user's saved overrides aren't clobbered by later reconnects.
     applyServerDefaults(config) {
-        if (this.#defaultsApplied) {
-            return;
-        }
-        this.#defaultsApplied = true;
-        const defaults = {
-            mouseMode: config.mouseMode,
-            moveSpeed: config.moveSpeed,
-            joystickDeadzone: config.joystickDeadzone,
-            joystickAcceleration: config.joystickAcceleration,
-        };
-        this.#values = Object.assign(defaults, this.#loadFromStorage() || {});
+        this.#values.mouseMode = config.mouseMode;
+        this.#values.moveSpeed = config.moveSpeed;
+        this.#values.joystickDeadzone = config.joystickDeadzone;
+        this.#values.joystickAcceleration = config.joystickAcceleration;
         this.#updateInputs();
         this.#updateVisibility();
-    }
-
-    #loadFromStorage() {
-        let stored = null;
-        try {
-            stored = JSON.parse(localStorage.getItem(STORAGE_KEY));
-        } catch {
-            stored = null;
-        }
-        if (stored && typeof stored == "object") {
-            Object.assign(this.#values, stored);
-            return stored;
-        }
-        return null;
-    }
-
-    #saveToStorage() {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.#values));
     }
 
     #updateInputs() {
@@ -116,7 +86,6 @@ export default class Settings {
         this.#values.joystickAcceleration = clamp(parseFloat(accelerationRange.value), 0, 10);
         this.#updateInputs();
         this.#updateVisibility();
-        this.#saveToStorage();
         this.#onChange();
     }
 }

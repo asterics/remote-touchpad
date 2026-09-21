@@ -24,6 +24,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -33,8 +34,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -68,6 +71,87 @@ type config struct {
 	MouseMode            string  `json:"mouseMode"`
 	JoystickDeadzone     float64 `json:"joystickDeadzone"`
 	JoystickAcceleration float64 `json:"joystickAcceleration"`
+}
+
+// persistentSettings holds the user-adjustable settings that are saved to disk,
+// so the next server start resumes with the settings last used in the web GUI.
+type persistentSettings struct {
+	MouseMode            string  `json:"mouseMode"`
+	MoveSpeed            float64 `json:"moveSpeed"`
+	JoystickDeadzone     float64 `json:"joystickDeadzone"`
+	JoystickAcceleration float64 `json:"joystickAcceleration"`
+}
+
+func defaultPersistentSettings() persistentSettings {
+	return persistentSettings{
+		MouseMode:            "trackpad",
+		MoveSpeed:            1,
+		JoystickDeadzone:     4,
+		JoystickAcceleration: 1,
+	}
+}
+
+// settingsFilePath returns the location of the persisted settings file, using the
+// OS-specific user config directory. Returns an error if it cannot be determined.
+func settingsFilePath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "remote-touchpad", "settings.json"), nil
+}
+
+func loadPersistentSettings(path string) (persistentSettings, error) {
+	settings := defaultPersistentSettings()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return settings, err
+	}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return defaultPersistentSettings(), err
+	}
+	return settings, nil
+}
+
+func savePersistentSettings(path string, settings persistentSettings) error {
+	if path == "" {
+		return errors.New("no settings file path")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+// settingsStore holds the settings currently in effect, shared by all connections,
+// and persists changes to disk. Safe for concurrent use.
+type settingsStore struct {
+	mu      sync.Mutex
+	path    string
+	current persistentSettings
+}
+
+func newSettingsStore(path string, initial persistentSettings) *settingsStore {
+	return &settingsStore{path: path, current: initial}
+}
+
+func (s *settingsStore) snapshot() persistentSettings {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.current
+}
+
+func (s *settingsStore) update(settings persistentSettings) {
+	s.mu.Lock()
+	s.current = settings
+	s.mu.Unlock()
+	if err := savePersistentSettings(s.path, settings); err != nil {
+		log.Printf("failed to save settings: %v", err)
+	}
 }
 
 // per-connection state for joystick mode, only accessed by a single connection's goroutine
@@ -131,7 +215,7 @@ const (
 	commandJoystickConfig          byte = 'g'
 )
 
-func processCommand(controller inputcontrol.Controller, js *joystickState, commandWithArg string) error {
+func processCommand(controller inputcontrol.Controller, js *joystickState, store *settingsStore, commandWithArg string) error {
 	if len(commandWithArg) == 0 {
 		return errors.New("empty command")
 	}
@@ -214,14 +298,24 @@ func processCommand(controller inputcontrol.Controller, js *joystickState, comma
 		}
 		return applyJoystickMove(controller, js, float64(x), float64(y))
 	case commandJoystickConfig:
-		var gain, deadzone, acceleration float64
-		if err := parseFloats(arg, &gain, &deadzone, &acceleration); err != nil {
+		var modeNum, gain, deadzone, acceleration float64
+		if err := parseFloats(arg, &modeNum, &gain, &deadzone, &acceleration); err != nil {
 			return err
 		}
 		if gain <= 0 || deadzone < 0 || acceleration < 0 {
 			return errors.New("invalid joystick configuration")
 		}
+		mode := "trackpad"
+		if modeNum != 0 {
+			mode = "joystick"
+		}
 		js.gain, js.deadzone, js.acceleration = gain, deadzone, acceleration
+		store.update(persistentSettings{
+			MouseMode:            mode,
+			MoveSpeed:            gain,
+			JoystickDeadzone:     deadzone,
+			JoystickAcceleration: acceleration,
+		})
 		return nil
 	default:
 		return errors.New("unsupported command")
@@ -265,22 +359,30 @@ func secureRandBase64(length int) string {
 
 func main() {
 	terminal.SetTitle(prettyAppName)
+	settingsPath, settingsPathErr := settingsFilePath()
+	persisted := defaultPersistentSettings()
+	if settingsPathErr != nil {
+		log.Printf("settings won't persist across restarts: %v", settingsPathErr)
+	} else if loaded, err := loadPersistentSettings(settingsPath); err == nil {
+		persisted = loaded
+	}
 	var bind, certFile, keyFile, secret string
-	var showVersion bool
+	var showVersion, trustedMode bool
 	var config config
 	flag.BoolVar(&showVersion, "version", false, "show program's version number and exit")
 	flag.StringVar(&bind, "bind", defaultBind, "bind server to [HOSTNAME]:PORT")
 	flag.StringVar(&secret, "secret", "", "shared secret for client authentication")
+	flag.BoolVar(&trustedMode, "trusted", false, "trusted mode: no secret required, for a fixed, bookmarkable URL (only use on trusted networks)")
 	flag.StringVar(&certFile, "cert", "", "file containing TLS certificate")
 	flag.StringVar(&keyFile, "key", "", "file containing TLS private key")
 	flag.UintVar(&config.UpdateRate, "update-rate", 30, "number of updates per second")
-	flag.Float64Var(&config.MoveSpeed, "move-speed", 1, "move speed multiplier")
+	flag.Float64Var(&config.MoveSpeed, "move-speed", persisted.MoveSpeed, "move speed multiplier")
 	flag.Float64Var(&config.ScrollSpeed, "scroll-speed", 1, "scroll speed multiplier")
 	flag.Float64Var(&config.MouseMoveSpeed, "mouse-move-speed", 1, "mouse move speed multiplier")
 	flag.Float64Var(&config.MouseScrollSpeed, "mouse-scroll-speed", 1, "mouse scroll speed multiplier")
-	flag.StringVar(&config.MouseMode, "mouse-mode", "trackpad", "touch mouse control mode: \"trackpad\" or \"joystick\"")
-	flag.Float64Var(&config.JoystickDeadzone, "joystick-deadzone", 4, "joystick mode: deadzone radius in pixels (0-20)")
-	flag.Float64Var(&config.JoystickAcceleration, "joystick-acceleration", 1, "joystick mode: acceleration factor while held (0 disables)")
+	flag.StringVar(&config.MouseMode, "mouse-mode", persisted.MouseMode, "touch mouse control mode: \"trackpad\" or \"joystick\"")
+	flag.Float64Var(&config.JoystickDeadzone, "joystick-deadzone", persisted.JoystickDeadzone, "joystick mode: deadzone radius in pixels (0-20)")
+	flag.Float64Var(&config.JoystickAcceleration, "joystick-acceleration", persisted.JoystickAcceleration, "joystick mode: acceleration factor while held (0 disables)")
 	flag.Parse()
 	if showVersion {
 		fmt.Println(version)
@@ -289,6 +391,9 @@ func main() {
 	if config.MouseMode != "trackpad" && config.MouseMode != "joystick" {
 		log.Fatal(`mouse mode must be "trackpad" or "joystick"`)
 	}
+	if trustedMode && secret != "" {
+		log.Fatal("-secret cannot be combined with -trusted")
+	}
 	if certFile != "" && keyFile == "" {
 		log.Fatal("TLS private key file missing")
 	}
@@ -296,7 +401,7 @@ func main() {
 		log.Fatal("TLS certificate file missing")
 	}
 	tls := certFile != "" && keyFile != ""
-	if secret == "" {
+	if !trustedMode && secret == "" {
 		secret = secureRandBase64(defaultSecretLength)
 	}
 	if len(inputcontrol.Controllers) == 0 {
@@ -324,6 +429,12 @@ func main() {
 		log.Fatal(fmt.Errorf("unsupported platform:\n%w", errors.Join(platformErrs...)))
 	}
 	defer controller.Close()
+	store := newSettingsStore(settingsPath, persistentSettings{
+		MouseMode:            config.MouseMode,
+		MoveSpeed:            config.MoveSpeed,
+		JoystickDeadzone:     config.JoystickDeadzone,
+		JoystickAcceleration: config.JoystickAcceleration,
+	})
 	authenticationChallenges := make(chan challenge, authenticationRateBurst)
 	go authenticationChallengeGenerator(secret, authenticationChallenges)
 	listener, err := net.Listen("tcp", bind)
@@ -358,18 +469,24 @@ func main() {
 		if !challenge.verify(message) {
 			return
 		}
-		websocket.JSON.Send(ws, config)
+		settings := store.snapshot()
+		connConfig := config
+		connConfig.MouseMode = settings.MouseMode
+		connConfig.MoveSpeed = settings.MoveSpeed
+		connConfig.JoystickDeadzone = settings.JoystickDeadzone
+		connConfig.JoystickAcceleration = settings.JoystickAcceleration
+		websocket.JSON.Send(ws, connConfig)
 		js := &joystickState{
-			gain:         config.MoveSpeed,
-			deadzone:     config.JoystickDeadzone,
-			acceleration: config.JoystickAcceleration,
+			gain:         settings.MoveSpeed,
+			deadzone:     settings.JoystickDeadzone,
+			acceleration: settings.JoystickAcceleration,
 			lastUpdate:   time.Now(),
 		}
 		for {
 			if err := websocket.Message.Receive(ws, &message); err != nil {
 				return
 			}
-			if err := processCommand(controller, js, message); err != nil {
+			if err := processCommand(controller, js, store, message); err != nil {
 				log.Print(fmt.Errorf("%s controller: %w", controllerName, err))
 				return
 			}
@@ -383,7 +500,10 @@ func main() {
 	if tls {
 		scheme = "https"
 	}
-	url := fmt.Sprintf("%s://%s/#%s", scheme, domain, secret)
+	url := fmt.Sprintf("%s://%s/", scheme, domain)
+	if secret != "" {
+		url += "#" + secret
+	}
 	fmt.Println(url)
 	if qrCode, err := terminal.GenerateQRCode(url, terminal.SupportsColor(os.Stdout.Fd())); err == nil {
 		fmt.Print(qrCode)
@@ -393,6 +513,15 @@ func main() {
 	if !tls {
 		fmt.Println("▌   WARNING: TLS is not enabled    ▐")
 		fmt.Println("▌Don't use in an untrusted network!▐")
+	}
+	if trustedMode {
+		fmt.Println("▌     WARNING: Trusted mode enabled      ▐")
+		fmt.Println("▌ No secret required - anyone who can    ▐")
+		fmt.Println("▌ reach this address has full control    ▐")
+		if _, bindPort, err := net.SplitHostPort(bind); err == nil && bindPort == "0" {
+			log.Print("Note: -bind uses an automatically assigned port; " +
+				"use e.g. -bind :8080 for a stable URL")
+		}
 	}
 	if tls {
 		err = http.ServeTLS(listener, mux, certFile, keyFile)

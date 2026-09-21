@@ -136,8 +136,10 @@ export default class InputController {
         }
     }
 
-    joystickConfigure(gain, deadzone, acceleration) {
-        this.#socket.send(`${COMMAND_JOYSTICK_CONFIG}${gain};${deadzone};${acceleration}`);
+    // Also persisted by the server, so it's sent whenever any setting changes.
+    joystickConfigure(mode, gain, deadzone, acceleration) {
+        const modeNum = mode == "joystick" ? 1 : 0;
+        this.#socket.send(`${COMMAND_JOYSTICK_CONFIG}${modeNum};${gain};${deadzone};${acceleration}`);
     }
 
     keyboardKey(key) {
