@@ -1,8 +1,8 @@
 [
     {
-        "phrases": ["Hey Computer", "He Blechtrottel"],
+        "phrases": ["What is your name", "say name"],
         "action": "print",
-        "text": "Yes that is me - I wnat to serve you!"
+        "text": "My name is Asterics"
     },
     {
         "phrases": ["turn on light", "lights on", "licht ein", "einschalten"],

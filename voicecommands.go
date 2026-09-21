@@ -32,6 +32,11 @@ import (
 
 const defaultVoiceCommandBaudRate int = 9600
 
+// voiceMatchThreshold is the minimum average per-word similarity (0-1) a
+// phrase needs to be accepted as a match for recognized (and possibly
+// misheard) speech.
+const voiceMatchThreshold float64 = 0.6
+
 // voiceCommand maps a set of accepted speech phrases to an action, loaded from
 // the voice commands JSON file (see -commands-file).
 type voiceCommand struct {
@@ -80,24 +85,93 @@ func loadVoiceCommands(path string) (voiceCommands, error) {
 	return commands, nil
 }
 
-func normalizeVoicePhrase(s string) string {
-	return strings.Trim(strings.ToLower(strings.TrimSpace(s)), ".!? ")
+func normalizeVoiceWords(s string) []string {
+	words := make([]string, 0)
+	for _, word := range strings.Fields(strings.ToLower(s)) {
+		if word = strings.Trim(word, ".,!?;:\"'()"); word != "" {
+			words = append(words, word)
+		}
+	}
+	return words
 }
 
-// match returns the first configured command whose phrase occurs in text.
+// levenshtein returns the edit distance between two rune slices.
+func levenshtein(a, b []rune) int {
+	prev := make([]int, len(b)+1)
+	curr := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		curr[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			curr[j] = min(prev[j]+1, curr[j-1]+1, prev[j-1]+cost)
+		}
+		prev, curr = curr, prev
+	}
+	return prev[len(b)]
+}
+
+// wordSimilarity returns 1 for identical words, down to 0 for completely
+// different ones, based on their edit distance relative to their length.
+func wordSimilarity(a, b string) float64 {
+	if a == b {
+		return 1
+	}
+	ra, rb := []rune(a), []rune(b)
+	maxLen := max(len(ra), len(rb))
+	if maxLen == 0 {
+		return 1
+	}
+	return 1 - float64(levenshtein(ra, rb))/float64(maxLen)
+}
+
+// phraseScore is the best average per-word similarity of phraseWords against
+// any equal-length, consecutive window of inputWords (so extra words spoken
+// before/after the phrase don't prevent a match).
+func phraseScore(phraseWords, inputWords []string) float64 {
+	if len(phraseWords) == 0 || len(inputWords) < len(phraseWords) {
+		return 0
+	}
+	best := 0.0
+	for start := 0; start+len(phraseWords) <= len(inputWords); start++ {
+		sum := 0.0
+		for i, word := range phraseWords {
+			sum += wordSimilarity(word, inputWords[start+i])
+		}
+		if score := sum / float64(len(phraseWords)); score > best {
+			best = score
+		}
+	}
+	return best
+}
+
+// match fuzzily compares text against all configured phrases (tolerating
+// misrecognized words and extra words before/after) and returns the command
+// whose closest phrase scores highest, provided it clears voiceMatchThreshold.
 func (commands voiceCommands) match(text string) (*voiceCommand, bool) {
-	normalized := normalizeVoicePhrase(text)
-	if normalized == "" {
+	inputWords := normalizeVoiceWords(text)
+	if len(inputWords) == 0 {
 		return nil, false
 	}
+	var best *voiceCommand
+	bestScore := 0.0
 	for i, cmd := range commands {
 		for _, phrase := range cmd.Phrases {
-			if p := normalizeVoicePhrase(phrase); p != "" && strings.Contains(normalized, p) {
-				return &commands[i], true
+			if score := phraseScore(normalizeVoiceWords(phrase), inputWords); score > bestScore {
+				bestScore = score
+				best = &commands[i]
 			}
 		}
 	}
-	return nil, false
+	if bestScore < voiceMatchThreshold {
+		return nil, false
+	}
+	return best, true
 }
 
 // run executes the command's action and returns a short human-readable result

@@ -53,6 +53,22 @@
             Push-to-talk key
             <button type="button" class="key-picker" id="ptt-key-button">Not set</button>
         </label>
+        <label id="voice-lang-setting">
+            Voice language
+            <select id="settings-voice-lang">
+                <option value="">Automatic (browser language)</option>
+                <option value="en-US">English (US)</option>
+                <option value="en-GB">English (UK)</option>
+                <option value="de-DE">German</option>
+                <option value="fr-FR">French</option>
+                <option value="es-ES">Spanish</option>
+                <option value="it-IT">Italian</option>
+            </select>
+        </label>
+        <label id="ptt-min-duration-setting">
+            Minimum hold time <span id="settings-ptt-min-duration-value">0.3s</span>
+            <input type="range" id="settings-ptt-min-duration" min="0" max="7000" step="100" value="300">
+        </label>
     </div>
     <button class="top left" onclick="history.back()">⯇</button>
 </div>

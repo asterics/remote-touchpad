@@ -14,9 +14,9 @@ voice commands are simply disabled.
 ```json
 [
     {
-        "phrases": ["turn on light", "lights on"],
+        "phrases": ["What is your name", "say name"],
         "action": "print",
-        "text": "Turning on the light"   // string to be printed in the GUI (just a notification, can be extended)
+        "text": "My name is Asterics"   // string to be printed (using key injection)
     },
     {
         "phrases": ["turn off light"],

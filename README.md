@@ -33,9 +33,16 @@ who can reach the address gets full control without authentication.
 The web GUI has a microphone button (🎤) on the touchpad screen for push-to-talk voice
 commands: hold the button while speaking, release when done. Speech-to-text
 happens in the browser; the recognized phrase is sent to the server, which
-matches it (case-insensitively, as a substring) against a small set of fixed
-commands and runs the associated action. A short result or error message is
+fuzzily matches it against a small set of fixed commands (tolerating extra
+words and minor misrecognitions, picking whichever configured phrase is
+closest) and runs the associated action. A short result or error message is
 shown above the button. Commands are configured in a JSON file, see config/Readme.md for details. 
+
+To avoid accidentally triggering a command from a very short/accidental
+press, a "Minimum hold time" slider in the settings panel (0-7s, default
+0.3s) keeps listening for that long even if the button/key is released
+sooner, instead of cutting the recording short; this value is stored in the
+browser only.
 
 A physical key (e.g. a button on a paired Bluetooth keyboard or an
 accessibility switch) can trigger push-to-talk too: in the settings panel,
@@ -43,6 +50,10 @@ tap "Push-to-talk key", then press the desired key to bind it (Esc cancels).
 The binding is stored in the browser only (not on the server). While a key is
 bound, it activates push-to-talk everywhere except while typing in a text
 field or adjusting a settings control, so it won't interfere with normal use.
+
+The recognition language defaults to the browser's own language, but can be
+overridden with the "Voice language" dropdown in the settings panel (e.g.
+English or German); this choice is also stored in the browser only.
 
 #### Microphone requirements
 

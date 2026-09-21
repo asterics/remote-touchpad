@@ -23,10 +23,17 @@ const SpeechRecognitionImpl = window.SpeechRecognition || window.webkitSpeechRec
 
 const FEEDBACK_TIMEOUT = 4000; // milliseconds
 const PTT_KEY_STORAGE_KEY = "pttKey";
+const VOICE_LANG_STORAGE_KEY = "voiceLang";
+const PTT_MIN_DURATION_STORAGE_KEY = "pttMinDuration";
 
 const button = document.getElementById("speak-button");
 const status = document.getElementById("voice-status");
 const pttKeyButton = document.getElementById("ptt-key-button");
+const voiceLangSetting = document.getElementById("voice-lang-setting");
+const voiceLangSelect = document.getElementById("settings-voice-lang");
+const minDurationSetting = document.getElementById("ptt-min-duration-setting");
+const minDurationRange = document.getElementById("settings-ptt-min-duration");
+const minDurationValue = document.getElementById("settings-ptt-min-duration-value");
 
 const isTypingTarget = (element) =>
     element && (element.tagName == "INPUT" || element.tagName == "TEXTAREA" || element.tagName == "SELECT");
@@ -51,11 +58,16 @@ export default class Speech {
     #statusTimeout = null;
     #pttCode = localStorage.getItem(PTT_KEY_STORAGE_KEY) || null;
     #binding = false;
+    #pressStartTime = 0;
+    #held = false;
+    #minHoldTimeout = null;
 
     constructor(inputController) {
         this.#inputController = inputController;
         if (!SpeechRecognitionImpl) {
             button.classList.add("hidden");
+            voiceLangSetting.classList.add("hidden");
+            minDurationSetting.classList.add("hidden");
             return;
         }
         button.addEventListener("touchstart", this.#handleStart.bind(this));
@@ -71,6 +83,19 @@ export default class Speech {
         document.addEventListener("keyup", this.#handlePttKeyup.bind(this), {capture: true});
         pttKeyButton.addEventListener("click", this.#handlePttKeyButtonClick.bind(this));
         this.#updatePttKeyButton();
+        voiceLangSelect.value = localStorage.getItem(VOICE_LANG_STORAGE_KEY) || "";
+        voiceLangSelect.addEventListener("change", () => {
+            localStorage.setItem(VOICE_LANG_STORAGE_KEY, voiceLangSelect.value);
+        });
+        const storedMinDuration = parseInt(localStorage.getItem(PTT_MIN_DURATION_STORAGE_KEY), 10);
+        if (Number.isFinite(storedMinDuration)) {
+            minDurationRange.value = storedMinDuration;
+        }
+        this.#updateMinDurationLabel();
+        minDurationRange.addEventListener("input", () => {
+            localStorage.setItem(PTT_MIN_DURATION_STORAGE_KEY, minDurationRange.value);
+            this.#updateMinDurationLabel();
+        });
     }
 
     showFeedback(text) {
@@ -82,13 +107,15 @@ export default class Speech {
 
     #handleStart(event) {
         event.preventDefault();
+        this.#held = true;
         if (this.#active) {
             return;
         }
         this.#active = true;
+        this.#pressStartTime = Date.now();
         button.classList.add("listening");
         this.#recognition = new SpeechRecognitionImpl();
-        this.#recognition.lang = navigator.language || "en-US";
+        this.#recognition.lang = voiceLangSelect.value || navigator.language || "en-US";
         this.#recognition.interimResults = true;
         this.#recognition.continuous = true;
         this.#recognition.addEventListener("result", this.#handleResult.bind(this));
@@ -126,9 +153,26 @@ export default class Speech {
         }
     }
 
+    // Keeps listening past the release until the configured minimum hold time
+    // has elapsed, instead of cutting off a command that was spoken quickly.
     #handleStop() {
+        this.#held = false;
         if (!this.#active) {
             return;
+        }
+        const minDuration = parseInt(minDurationRange.value, 10) || 0;
+        const remaining = minDuration - (Date.now() - this.#pressStartTime);
+        clearTimeout(this.#minHoldTimeout);
+        if (remaining > 0) {
+            this.#minHoldTimeout = setTimeout(this.#finishListening.bind(this), remaining);
+            return;
+        }
+        this.#finishListening();
+    }
+
+    #finishListening() {
+        if (this.#held) {
+            return; // pressed again before the minimum hold time elapsed
         }
         this.#active = false;
         button.classList.remove("listening");
@@ -140,6 +184,10 @@ export default class Speech {
 
     #updatePttKeyButton() {
         pttKeyButton.textContent = this.#binding ? "Press a key… (Esc to cancel)" : formatKeyCode(this.#pttCode);
+    }
+
+    #updateMinDurationLabel() {
+        minDurationValue.textContent = `${(parseInt(minDurationRange.value, 10) / 1000).toFixed(1)}s`;
     }
 
     #handlePttKeyButtonClick() {
