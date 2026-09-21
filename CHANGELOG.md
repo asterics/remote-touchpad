@@ -6,6 +6,8 @@
 * Add joystick mouse control mode (proportional movement from a touch zero point) with adjustable speed, deadzone and hold acceleration
 * Persist settings on the server across restarts
 * Add trusted mode (`-trusted`) for a fixed, secret-less URL
+* Add push-to-talk voice commands with configurable "print" and "UART Send" actions (`-commands-file`)
+* Add configurable push-to-talk key binding for physical/Bluetooth keyboards
 
 ## 1.5.5 (2026-09-12)
 
