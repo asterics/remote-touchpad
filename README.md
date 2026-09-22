@@ -86,10 +86,7 @@ your system/browser trust stores.
    mkcert -install
    ```
 
-   This installs the CA into your OS/browser trust store. On Windows, if it
-   also fails to update a Java `cacerts` keystore with a permission error,
-   that's harmless and can be ignored unless you specifically need Java
-   applications to trust it.
+   This installs the CA into your OS/browser trust store.
 
 2. **Generate a certificate** for the address your phone will connect to
    (both the LAN IP and hostname, if you use one):
@@ -142,9 +139,13 @@ your system/browser trust stores.
     go install -tags portal,uinput,x11 github.com/unrud/remote-touchpad@latest
     ```
   * Windows:
-
     ```sh
     go install github.com/unrud/remote-touchpad@latest
+    ```
+    * for building, you might need to install a [gcc/g++ toolchain](https://github.com/skeeto/w64devkit/releases) to compile the controller .c code, then:
+    ```sh
+	set CGO_ENABLED=1
+	go build
     ```
 
 ## Screenshots
