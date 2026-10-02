@@ -26,10 +26,17 @@ const challengeResponse = (message, secret) => {
     return btoa(shaObj.getHMAC("BYTES"));
 };
 
+const COMMAND_RTC_OFFER = "r";
+const ICE_GATHER_TIMEOUT = 2000;
+// Drop datagrams instead of queueing them when the link is congested.
+const MAX_BUFFERED_BYTES = 2048;
+
 export default class Socket extends EventTarget {
     #secret;
     #authenticated;
     #ws;
+    #pc = null;
+    #dc = null;
 
     constructor(url, secret) {
         super();
@@ -57,14 +64,70 @@ export default class Socket extends EventTarget {
             this.dispatchEvent(new CustomEvent("voice-feedback", {detail: message.voiceFeedback}));
             return;
         }
+        if (message && typeof message == "object" && "rtcAnswer" in message) {
+            if (this.#pc) {
+                this.#pc.setRemoteDescription({type: "answer", sdp: message.rtcAnswer}).catch(console.warn);
+            }
+            return;
+        }
         this.dispatchEvent(new CustomEvent("config", {detail: message}));
+        if (!this.#pc) {
+            this.#setupUnreliable().catch(console.warn);
+        }
     }
 
     #handle_ws_close() {
+        this.#dc = null;
+        if (this.#pc) {
+            this.#pc.close();
+        }
         this.dispatchEvent(new CustomEvent("close"));
+    }
+
+    // Optional low-latency path (UDP): on any failure everything keeps working over the WebSocket.
+    async #setupUnreliable() {
+        if (typeof RTCPeerConnection === "undefined") {
+            return;
+        }
+        const pc = new RTCPeerConnection();
+        this.#pc = pc;
+        const dc = pc.createDataChannel("move", {ordered: false, maxRetransmits: 0});
+        dc.addEventListener("open", () => {
+            this.#dc = dc;
+        });
+        dc.addEventListener("close", () => {
+            if (this.#dc === dc) {
+                this.#dc = null;
+            }
+        });
+        await pc.setLocalDescription(await pc.createOffer());
+        await new Promise((resolve) => {
+            if (pc.iceGatheringState == "complete") {
+                resolve();
+                return;
+            }
+            const timeout = setTimeout(resolve, ICE_GATHER_TIMEOUT);
+            pc.addEventListener("icegatheringstatechange", () => {
+                if (pc.iceGatheringState == "complete") {
+                    clearTimeout(timeout);
+                    resolve();
+                }
+            });
+        });
+        this.#ws.send(COMMAND_RTC_OFFER + pc.localDescription.sdp);
     }
 
     send(message) {
         this.#ws.send(message);
+    }
+
+    get unreliableOpen() {
+        return this.#dc !== null && this.#dc.readyState == "open";
+    }
+
+    sendUnreliable(message) {
+        if (this.unreliableOpen && this.#dc.bufferedAmount <= MAX_BUFFERED_BYTES) {
+            this.#dc.send(message);
+        }
     }
 }

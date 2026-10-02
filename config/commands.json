@@ -7,15 +7,15 @@
     {
         "phrases": ["turn on light", "lights on", "licht ein", "einschalten"],
         "action": "uart",
-        "port": "COM7",
+        "port": "COM16",
         "baudRate": 115200,
-        "text": "AT IP licht-ein\n"
+        "text": "AT IP ein\n"
     },
     {
         "phrases": ["turn off light", "lights off", "licht aus", "ausschalten"],
         "action": "uart",
-        "port": "COM7",
+        "port": "COM16",
         "baudRate": 115200,
-        "text": "AT IP licht-aus\n"
+        "text": "AT IP aus\n"
     }
 ]

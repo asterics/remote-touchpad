@@ -14,7 +14,9 @@ This fork adds a settings panel to the web GUI with:
   (relative dragging) and a new **joystick** mode: touching the screen sets a
   zero point, and moving the finger away from it drives a proportional,
   joystick-like cursor movement (computed server-side) until the finger is
-  lifted. Clicking and dragging behave exactly as before.
+  lifted. The phone only sends the vector when it changes; the host moves
+  the cursor at a steady 30 Hz, which avoids bursts and jitter. Clicking and
+  dragging behave exactly as before.
 * An adjustable **mouse speed** (gain, 10%-1000%, via slider).                     
 * An adjustable **deadzone** (0-20 pixels) around the joystick zero point.
 * An adjustable **acceleration factor**, so the cursor moves faster the
@@ -22,6 +24,20 @@ This fork adds a settings panel to the web GUI with:
 
 Settings changed in the web GUI are saved on the server and are still in
 effect after restarting it.
+
+### Low-latency pointer transfer (UDP)
+
+To avoid lag and bursts caused by TCP retransmissions on wireless links,
+pointer movement (and the joystick vector) is sent over an unordered,
+unreliable WebRTC data channel, which is UDP on the wire. It is negotiated
+automatically over the authenticated WebSocket. Pointer moves are sent as
+running totals, so lost or reordered packets neither lose movement nor cause
+jumps. Scrolling, buttons, keyboard input, voice commands and settings still
+use the reliable WebSocket.
+
+If WebRTC is unavailable or blocked, everything transparently falls back to
+the WebSocket. The host uses random UDP ports, so allow the program's inbound
+UDP traffic in the firewall to benefit from this.
 
 A new **trusted mode** (`-trusted` flag) disables the per-run secret, so the
 server can be reached under a fixed, bookmarkable URL (combine with a fixed

@@ -60,6 +60,12 @@ export default class InputController {
     #scrolling = false;
     #scrollFinish = false;
     #updateTimeoutActive = false;
+    // Datagram stream state: moves are sent as running totals so lost datagrams are made up by the next.
+    #datagramSeq = 0;
+    #moveXTotal = 0;
+    #moveYTotal = 0;
+    #joystickX = 0;
+    #joystickY = 0;
     #socket;
 
     constructor(socket) {
@@ -76,12 +82,7 @@ export default class InputController {
         }
         this.#updateTimeoutActive = false;
         let finished = true;
-        const xInt = Math.trunc(this.#moveXSum);
-        const yInt = Math.trunc(this.#moveYSum);
-        if (xInt != 0 || yInt != 0) {
-            this.#socket.send(`${COMMAND_POINTER_MOVE}${xInt};${yInt}`);
-            this.#moveXSum -= xInt;
-            this.#moveYSum -= yInt;
+        if (this.#flushMove()) {
             finished = false;
         }
         const hInt = Math.trunc(this.#scrollHSum);
@@ -108,9 +109,34 @@ export default class InputController {
         }
     }
 
+    #flushMove() {
+        const xInt = Math.trunc(this.#moveXSum);
+        const yInt = Math.trunc(this.#moveYSum);
+        if (xInt == 0 && yInt == 0) {
+            return false;
+        }
+        if (this.#socket.unreliableOpen) {
+            this.#moveXTotal += xInt;
+            this.#moveYTotal += yInt;
+            this.#datagramSeq += 1;
+            this.#socket.sendUnreliable(
+                `${COMMAND_POINTER_MOVE}${this.#datagramSeq};${this.#moveXTotal};${this.#moveYTotal}`);
+        } else {
+            this.#socket.send(`${COMMAND_POINTER_MOVE}${xInt};${yInt}`);
+        }
+        this.#moveXSum -= xInt;
+        this.#moveYSum -= yInt;
+        return true;
+    }
+
     pointerMove(deltaX, deltaY) {
         this.#moveXSum += deltaX;
         this.#moveYSum += deltaY;
+        if (this.#socket.unreliableOpen) {
+            // No batching needed: stale or lost datagrams are harmless and don't pile up.
+            this.#flushMove();
+            return;
+        }
         this.#startUpdate();
     }
 
@@ -125,15 +151,29 @@ export default class InputController {
         this.#socket.send(`${COMMAND_POINTER_BUTTON}${button};${press ? 1 : 0}`);
     }
 
-    // Sends the finger's current offset from the joystick zero point (not a delta);
-    // the server derives velocity from it (deadzone/gain/hold-acceleration applied server-side).
+    // Sends the finger's current offset from the joystick zero point (not a delta), only when it
+    // changes; the host keeps moving the cursor at a steady rate (deadzone/gain/acceleration applied there).
     pointerJoystickMove(offsetX, offsetY) {
         const x = Math.round(offsetX);
         const y = Math.round(offsetY);
-        if (x != 0 || y != 0) {
-            this.#socket.send(`${COMMAND_POINTER_JOYSTICK_MOVE}${x};${y}`);
-        } else {
+        if (x == this.#joystickX && y == this.#joystickY) {
+            return;
+        }
+        this.#joystickX = x;
+        this.#joystickY = y;
+        const released = x == 0 && y == 0;
+        if (this.#socket.unreliableOpen) {
+            this.#datagramSeq += 1;
+            this.#socket.sendUnreliable(`${COMMAND_POINTER_JOYSTICK_MOVE}${this.#datagramSeq};${x};${y}`);
+            if (!released) {
+                return;
+            }
+        }
+        // The release must not get lost, so it's also sent reliably.
+        if (released) {
             this.#socket.send(COMMAND_POINTER_JOYSTICK_MOVE);
+        } else {
+            this.#socket.send(`${COMMAND_POINTER_JOYSTICK_MOVE}${x};${y}`);
         }
     }
 

@@ -23,8 +23,6 @@ import {POINTER_BUTTON_LEFT, POINTER_BUTTON_MIDDLE, POINTER_BUTTON_RIGHT} from "
 const TOUCH_MOVE_THRESHOLD = [10, 15, 15];
 // Max time between consecutive touches for clicking or dragging (as milliseconds)
 const TOUCH_TIMEOUT = 250;
-// Interval for resending the joystick offset while a finger is held still (as milliseconds)
-const JOYSTICK_UPDATE_INTERVAL = 50;
 // [[pixel/second, multiplicator], ...]
 const POINTER_ACCELERATION = [
     [0, 0],
@@ -76,9 +74,7 @@ export default class Touchpad {
     #ongoingTouches = [];
     #dragging = false;
     #draggingTimeout = null;
-    #joystickTimer = null;
-    #joystickOffsetX = 0;
-    #joystickOffsetY = 0;
+    #joystickActive = false;
     #inputController;
     #checkAllowedCallback;
 
@@ -113,24 +109,6 @@ export default class Touchpad {
     #handleDraggingTimeout() {
         this.#draggingTimeout = null;
         this.#inputController.pointerButton(POINTER_BUTTON_LEFT, false);
-    }
-
-    #startJoystickTimer() {
-        if (this.#joystickTimer != null) {
-            return;
-        }
-        this.#joystickTimer = setInterval(() => {
-            this.#inputController.pointerJoystickMove(this.#joystickOffsetX, this.#joystickOffsetY);
-        }, JOYSTICK_UPDATE_INTERVAL);
-    }
-
-    #stopJoystickTimer() {
-        if (this.#joystickTimer != null) {
-            clearInterval(this.#joystickTimer);
-            this.#joystickTimer = null;
-        }
-        this.#joystickOffsetX = 0;
-        this.#joystickOffsetY = 0;
     }
 
     #handleTouchstart(event) {
@@ -190,8 +168,8 @@ export default class Touchpad {
             this.#moved = true;
         }
         if (this.#ongoingTouches.length == 0 && this.#releasedCount >= 1) {
-            if (this.#joystickTimer != null) {
-                this.#stopJoystickTimer();
+            if (this.#joystickActive) {
+                this.#joystickActive = false;
                 this.#inputController.pointerJoystickMove(0, 0);
             }
             if (this.#dragging) {
@@ -261,9 +239,7 @@ export default class Touchpad {
         if (this.#moved && event.timeStamp - this.#lastEndTimeStamp >= TOUCH_TIMEOUT) {
             if (this.#ongoingTouches.length == 1 || this.#dragging) {
                 if (this.#mouseMode == "joystick") {
-                    this.#joystickOffsetX = offsetX;
-                    this.#joystickOffsetY = offsetY;
-                    this.#startJoystickTimer();
+                    this.#joystickActive = true;
                     this.#inputController.pointerJoystickMove(offsetX, offsetY);
                 } else {
                     this.#inputController.pointerMove(

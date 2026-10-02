@@ -8,6 +8,8 @@
 * Add trusted mode (`-trusted`) for a fixed, secret-less URL
 * Add push-to-talk voice commands with configurable "print" and "UART Send" actions (`-commands-file`)
 * Add configurable push-to-talk key binding for physical/Bluetooth keyboards
+* Send pointer movement over an unreliable UDP (WebRTC data channel) transport to reduce lag and bursts, with WebSocket fallback
+* Joystick mode: send only vector changes and move the cursor at a steady 30 Hz on the host
 
 ## 1.5.5 (2026-09-12)
 

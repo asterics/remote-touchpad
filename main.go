@@ -47,6 +47,7 @@ import (
 )
 
 const (
+	joystickTickInterval    time.Duration = time.Second / 30
 	defaultSecretLength     int           = 12
 	authenticationRateLimit time.Duration = time.Second / 10
 	authenticationRateBurst int           = 10
@@ -56,7 +57,7 @@ const (
 	prettyAppName           string        = "Remote Touchpad"
 	// pixels/second of cursor movement per pixel of joystick deflection (at gain 1)
 	joystickBaseGain float64 = 0.4
-	// clamp elapsed time between joystick updates to avoid jumps after pauses (seconds)
+	// clamp elapsed time between joystick ticks to avoid jumps after scheduling stalls (seconds)
 	joystickMaxDT float64 = 0.25
 	// upper bound for the hold-duration acceleration multiplier
 	joystickMaxAccelMult float64 = 8
@@ -160,47 +161,52 @@ func (s *settingsStore) update(settings persistentSettings) {
 	}
 }
 
-// per-connection state for joystick mode, only accessed by a single connection's goroutine
+// per-connection state for joystick mode; guarded by the connection's mutex
 type joystickState struct {
 	gain         float64
 	deadzone     float64
 	acceleration float64
+	offsetX      float64
+	offsetY      float64
 	holding      bool
 	holdStart    time.Time
-	lastUpdate   time.Time
+	lastTick     time.Time
 	remainderX   float64
 	remainderY   float64
 }
 
-// applyJoystickMove converts the current finger offset from the zero point into
-// proportional cursor movement, applying deadzone, gain and hold-duration acceleration.
-func applyJoystickMove(controller inputcontrol.Controller, js *joystickState, offsetX, offsetY float64) error {
-	now := time.Now()
-	mag := math.Hypot(offsetX, offsetY)
+// setOffset stores the finger offset from the zero point; the client only sends it when it changes.
+func (js *joystickState) setOffset(offsetX, offsetY float64) {
+	js.offsetX, js.offsetY = offsetX, offsetY
+}
+
+// tick moves the cursor for one period at the stored offset, applying deadzone, gain and
+// hold-duration acceleration. Called at a fixed rate by runJoystickLoop.
+func (js *joystickState) tick(controller inputcontrol.Controller, now time.Time) error {
+	mag := math.Hypot(js.offsetX, js.offsetY)
 	if mag <= js.deadzone {
 		js.holding = false
 		js.remainderX, js.remainderY = 0, 0
-		js.lastUpdate = now
 		return nil
 	}
+	dt := now.Sub(js.lastTick).Seconds()
 	if !js.holding {
 		js.holding = true
 		js.holdStart = now
-		js.lastUpdate = now
+		dt = joystickTickInterval.Seconds()
 	}
-	dt := now.Sub(js.lastUpdate).Seconds()
+	js.lastTick = now
 	if dt > joystickMaxDT {
 		dt = joystickMaxDT
 	}
-	js.lastUpdate = now
 	accelMult := 1 + js.acceleration*now.Sub(js.holdStart).Seconds()
 	if accelMult > joystickMaxAccelMult {
 		accelMult = joystickMaxAccelMult
 	}
 	effMag := mag - js.deadzone
 	speed := effMag * joystickBaseGain * js.gain * accelMult
-	moveX := offsetX/mag*speed*dt + js.remainderX
-	moveY := offsetY/mag*speed*dt + js.remainderY
+	moveX := js.offsetX/mag*speed*dt + js.remainderX
+	moveY := js.offsetY/mag*speed*dt + js.remainderY
 	intX, intY := int(moveX), int(moveY)
 	js.remainderX = moveX - float64(intX)
 	js.remainderY = moveY - float64(intY)
@@ -208,6 +214,26 @@ func applyJoystickMove(controller inputcontrol.Controller, js *joystickState, of
 		return nil
 	}
 	return controller.PointerMove(intX, intY)
+}
+
+// runJoystickLoop moves the cursor at a steady rate, independent of when updates arrive from the
+// client, until stop is closed.
+func runJoystickLoop(controller inputcontrol.Controller, js *joystickState, mu *sync.Mutex, stop <-chan struct{}) {
+	ticker := time.NewTicker(joystickTickInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case now := <-ticker.C:
+			mu.Lock()
+			err := js.tick(controller, now)
+			mu.Unlock()
+			if err != nil {
+				log.Print(fmt.Errorf("joystick: %w", err))
+			}
+		}
+	}
 }
 
 const (
@@ -304,7 +330,8 @@ func processCommand(controller inputcontrol.Controller, js *joystickState, store
 				return err
 			}
 		}
-		return applyJoystickMove(controller, js, float64(x), float64(y))
+		js.setOffset(float64(x), float64(y))
+		return nil
 	case commandJoystickConfig:
 		var modeNum, gain, deadzone, acceleration float64
 		if err := parseFloats(arg, &modeNum, &gain, &deadzone, &acceleration); err != nil {
@@ -516,16 +543,49 @@ func main() {
 			gain:         settings.MoveSpeed,
 			deadzone:     settings.JoystickDeadzone,
 			acceleration: settings.JoystickAcceleration,
-			lastUpdate:   time.Now(),
 		}
 		sendFeedback := func(text string) {
 			websocket.JSON.Send(ws, feedbackMessage{VoiceFeedback: text})
 		}
+		// Guards controller and js, which are also used by the data channel and joystick goroutines.
+		var mu sync.Mutex
+		stopJoystick := make(chan struct{})
+		defer close(stopJoystick)
+		go runJoystickLoop(controller, js, &mu, stopJoystick)
+		us := &unreliableState{}
+		var closeRTC func()
+		defer func() {
+			if closeRTC != nil {
+				closeRTC()
+			}
+		}()
 		for {
 			if err := websocket.Message.Receive(ws, &message); err != nil {
 				return
 			}
-			if err := processCommand(controller, js, store, commands, sendFeedback, message); err != nil {
+			if len(message) > 0 && message[0] == commandRTCOffer {
+				if closeRTC != nil || !utf8.ValidString(message) {
+					continue
+				}
+				answer, closeFn, err := answerRTCOffer(message[1:], func(msg string) {
+					mu.Lock()
+					defer mu.Unlock()
+					if err := processUnreliable(controller, js, us, msg); err != nil {
+						log.Print(fmt.Errorf("%s controller: %w", controllerName, err))
+					}
+				})
+				if err != nil {
+					log.Printf("WebRTC setup failed, using WebSocket only: %v", err)
+					continue
+				}
+				closeRTC = closeFn
+				websocket.JSON.Send(ws, rtcAnswerMessage{RTCAnswer: answer})
+				continue
+			}
+			mu.Lock()
+			err := processCommand(controller, js, store, commands, sendFeedback, message)
+			mu.Unlock()
+			if err != nil {
 				log.Print(fmt.Errorf("%s controller: %w", controllerName, err))
 				return
 			}
